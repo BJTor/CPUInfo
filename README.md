@@ -10,6 +10,7 @@ system, including:
  * Number of CPU sockets
  * Number of physical CPU cores
  * Operating system name & version
+
 These are provided by /proc/cpu (Unix), sysctl (Mac) or WMIC (Windows).
 
 Requires MATLAB R2016b or above.
