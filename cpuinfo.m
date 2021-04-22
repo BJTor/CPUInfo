@@ -28,26 +28,39 @@ end
 
 %-------------------------------------------------------------------------%
 function info = cpuInfoWindows()
-sysInfo = callWMIC( 'cpu' );
-osInfo = callWMIC( 'os' );
+sysInfo = callWMIC( 'CPU', {'Name','MaxClockSpeed','L2CacheSize','NumberOfCores'} );
+osInfo = callWMIC( 'OS', {'Caption','FreePhysicalMemory'} );
+computerInfo = callWMIC( 'ComputerSystem', {'Name','TotalPhysicalMemory'} );
 
 info = struct( ...
-    'Name', sysInfo.Name, ...
+    'CPUName', sysInfo.Name, ...
     'Clock', [sysInfo.MaxClockSpeed,' MHz'], ...
-    'Cache', [sysInfo.L2CacheSize,' KB'], ...
-    'NumProcessors', str2double( sysInfo.NumberOfCores ), ...
+    'Cache', str2double(sysInfo.L2CacheSize) * 1024, ... % Convert from kB
+    'TotalMemory', str2double(computerInfo.TotalPhysicalMemory), ...
+    'FreeMemory', str2double(computerInfo.FreePhysicalMemory), ...
+    'NumCPUs', sysInfo.NumCPUs, ...
+    'TotalCores', str2double( sysInfo.NumberOfCores ), ...
     'OSType', 'Windows', ...
-    'OSVersion', osInfo.Caption );
+    'OSVersion', osInfo.Caption, ...
+    'Hostname', computerInfo.Name );
 
 %-------------------------------------------------------------------------%
-function info = callWMIC( alias )
+function info = callWMIC( alias, field )
 % Call the MS-DOS WMIC (Windows Management) command
 
 % We move to a temporary folder since WMIC needs write access to the local
 % folder
 olddir = pwd();
 cd( tempdir );
-[~, sysinfo] = system(sprintf( 'wmic %s get /value', alias ));
+if nargin<2
+    % Get all fields
+    [~, sysinfo] = system(sprintf( 'wmic %s get /value', alias ));
+else
+    if iscell(field)
+        field = strjoin(field, ',');
+    end
+    [~, sysinfo] = system(sprintf( 'wmic %s get %s  /value', alias, field ));
+end
 cd( olddir );
 fields = textscan( sysinfo, '%s', 'Delimiter', '\n' ); fields = fields{1};
 fields( cellfun( 'isempty', fields ) ) = [];
@@ -79,17 +92,26 @@ end
 % Convert to a structure
 info = cell2struct( values, fields );
 
+% If looking at CPUs, return the count too
+if strcmpi(alias, 'CPU')
+    info.NumCPUs = numResults;
+end
+
 %-------------------------------------------------------------------------%
 function info = cpuInfoMac()
 machdep = callSysCtl( 'machdep.cpu' );
 hw = callSysCtl( 'hw' );
+kern = callSysCtl( 'kern.hostname' );
 info = struct( ...
-    'Name', machdep.brand_string, ...
+    'CPUName', machdep.brand_string, ...
     'Clock', [num2str(str2double(hw.cpufrequency_max)/1e6),' MHz'], ...
-    'Cache', [machdep.cache.size,' KB'], ...
-    'NumProcessors', str2double( machdep.core_count ), ...
+    'Cache', str2double(machdep.cache.size)*1024, ... % convert from kB
+    'TotalMemory', str2double(hw.memsize), ...
+    'NumCPUs', 1, ... % No multi-socket Macs that I'm aware of!
+    'TotalCores', str2double( machdep.core_count ), ...
     'OSType', 'Mac OS/X', ...
-    'OSVersion', getOSXVersion() );
+    'OSVersion', getOSXVersion(), ...
+    'Hostname', kern.kern.hostname );
 
 %-------------------------------------------------------------------------%
 function info = callSysCtl( namespace )
@@ -126,38 +148,43 @@ vernum = strtrim(vernum{1});
 
 %-------------------------------------------------------------------------%
 function info = cpuInfoUnix()
-txt = readLinuxCPUInfo();
+txt = readLinuxInfo('/proc/cpuinfo');
 cpuinfo = parseLinuxCPUInfoText( txt );
 
-txt = readLinuxOSInfo();
+txt = readLinuxInfo('/proc/version');
 osinfo = parseLinuxOSInfoText( txt );
 
-txt = readLinuxMemInfo();
+txt = readLinuxInfo('/proc/meminfo');
 meminfo = parseLinuxMemInfoText( txt );
+
+txt = readLinuxInfo('/proc/sys/kernel/hostname');
+hostInfo = parseLinuxHostInfoText( txt );
 
 % Merge the structures
 info = cell2struct( [ ...
     struct2cell( cpuinfo )
     struct2cell( meminfo )
     struct2cell( osinfo )
+    struct2cell( hostInfo )
     ], [ ...
     fieldnames( cpuinfo )
     fieldnames( meminfo )
     fieldnames( osinfo )
+    fieldnames( hostInfo )
     ] );
 
 %-------------------------------------------------------------------------%
 function info = parseLinuxCPUInfoText( txt )
 % Now parse the fields
 lookup = {
-    'model name',  'Name'
+    'model name',  'CPUName'
     'cpu Mhz',     'Clock'
     'cpu cores',   'CoresPerCPU'
     'physical id', 'NumCPUs'
     'cache size',  'Cache'
     };
 info = struct( ...
-    'Name', {''}, ...
+    'CPUName', {''}, ...
     'Clock', {''}, ...
     'Cache', {''}, ...
     'CoresPerCPU', {[]}, ...
@@ -208,12 +235,15 @@ info = struct( ...
 b = extractBetween(txt{1}, 'Linux version ', ' (');
 info.OSVersion = b{1};
 
-
 %-------------------------------------------------------------------------%
 function info = parseLinuxMemInfoText( txt )
 info = struct( ...
     'TotalMemory', parseMemoryValue(txt, 'MemTotal'), ...
     'FreeMemory', parseMemoryValue(txt, 'MemFree') );
+
+%-------------------------------------------------------------------------%
+function info = parseLinuxHostInfoText( txt )
+info = struct( 'Hostname', txt{1} );
 
 %-------------------------------------------------------------------------%
 function bytes = parseMemoryValue(txt, fieldname)
@@ -235,37 +265,12 @@ else
     bytes = str2double(txt(txt>='0' & txt<='9')) * bytesMultiplier;
 end
 
-
 %-------------------------------------------------------------------------%
-function txt = readLinuxCPUInfo()
+function txt = readLinuxInfo(file)
 
-fid = fopen( '/proc/cpuinfo', 'rt' );
+fid = fopen( file, 'rt' );
 if fid<0
-    error( 'cpuinfo:BadPROCCPUInfo', 'Could not open /proc/cpuinfo for reading' );
-end
-cleanup = onCleanup( @() fclose( fid ) );
-
-txt = textscan( fid, '%s', 'Delimiter', '\n' );
-txt = txt{1};
-
-%-------------------------------------------------------------------------%
-function txt = readLinuxOSInfo()
-
-fid = fopen( '/proc/version', 'rt' );
-if fid<0
-    error( 'cpuinfo:BadProcVersion', 'Could not open /proc/version for reading' );
-end
-cleanup = onCleanup( @() fclose( fid ) );
-
-txt = textscan( fid, '%s', 'Delimiter', '\n' );
-txt = txt{1};
-
-%-------------------------------------------------------------------------%
-function txt = readLinuxMemInfo()
-
-fid = fopen( '/proc/meminfo', 'rt' );
-if fid<0
-    error( 'cpuinfo:BadProcVersion', 'Could not open /proc/version for reading' );
+    error( 'cpuinfo:BadProcFile', 'Could not open %s for reading', file );
 end
 cleanup = onCleanup( @() fclose( fid ) );
 
