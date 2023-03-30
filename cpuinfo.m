@@ -13,7 +13,7 @@ function info = cpuinfo()
 %   See also: COMPUTER, ISUNIX, ISMAC
 
 %   Author: Ben Tordoff
-%   Copyright 2011-2021 The MathWorks, Inc.
+%   Copyright 2011-2023 The MathWorks, Inc.
 
 if isunix
     if ismac
@@ -101,10 +101,20 @@ function info = cpuInfoMac()
 machdep = callSysCtl( 'machdep.cpu' );
 hw = callSysCtl( 'hw' );
 kern = callSysCtl( 'kern.hostname' );
+
+% Apple Silicon no longer reports cache size or frequency
+if strcmp(computer,'MACA64')
+    maxFreq = 'N/A';
+    cacheBytes = NaN;
+else
+    maxFreq = [num2str(str2double(hw.cpufrequency_max)/1e6),' MHz'];
+    cacheBytes = str2double(machdep.cache.size)*1024; % convert from kB
+end
+
 info = struct( ...
     'CPUName', machdep.brand_string, ...
-    'Clock', [num2str(str2double(hw.cpufrequency_max)/1e6),' MHz'], ...
-    'Cache', str2double(machdep.cache.size)*1024, ... % convert from kB
+    'Clock', maxFreq, ...
+    'Cache', cacheBytes, ...
     'TotalMemory', str2double(hw.memsize), ...
     'NumCPUs', 1, ... % No multi-socket Macs that I'm aware of!
     'TotalCores', str2double( machdep.core_count ), ...
