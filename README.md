@@ -13,6 +13,6 @@ system, including:
  * Number of physical CPU cores
  * Operating system name & version
 
-These are provided by /proc/cpu (Unix), sysctl (Mac) or WMIC (Windows).
+These are provided by /proc/cpu (Unix), sysctl and sw_vers (Mac) or WMIC (Windows).
 
 Requires MATLAB R2016b or above.
