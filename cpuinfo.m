@@ -118,8 +118,8 @@ info = struct( ...
     'TotalMemory', str2double(hw.memsize), ...
     'NumCPUs', 1, ... % No multi-socket Macs that I'm aware of!
     'TotalCores', str2double( machdep.core_count ), ...
-    'OSType', 'Mac OS/X', ...
-    'OSVersion', getOSXVersion(), ...
+    'OSType', getMacOSType(), ...
+    'OSVersion', getMacOSVersion(), ...
     'Hostname', kern.kern.hostname );
 
 %-------------------------------------------------------------------------%
@@ -149,11 +149,16 @@ for ii=1:numel( infostr )
 end
 
 %-------------------------------------------------------------------------%
-function vernum = getOSXVersion()
+function vernum = getMacOSVersion()
 % Extract the OS version number from the system software version output.
-[~, ver] = system('sw_vers');
-vernum = regexp(ver, 'ProductVersion:\s([1234567890.]*)', 'tokens', 'once');
-vernum = strtrim(vernum{1});
+[~, vernum] = system('sw_vers -productVersion');
+vernum = strtrim(vernum);
+
+%-------------------------------------------------------------------------%
+function type = getMacOSType()
+% Extract the OS type from the system software version output.
+[~, type] = system('sw_vers -productName');
+type = strtrim(type);
 
 %-------------------------------------------------------------------------%
 function info = cpuInfoUnix()
