@@ -102,11 +102,14 @@ machdep = callSysCtl( 'machdep.cpu' );
 hw = callSysCtl( 'hw' );
 kern = callSysCtl( 'kern.hostname' );
 
-% Apple Silicon no longer reports cache size or frequency
-if strcmp(computer,'MACA64')
+% Apple Silicon (even if emulating Intel) no longer reports cache size and
+% reports frequency differently.
+if strcmp(computer,'MACA64') || ~isfield(machdep, 'cache')
+    % Apple Silicon Mac
     maxFreq = 'N/A';
-    cacheBytes = NaN;
+    cacheBytes = str2double(hw.l1dcachesize); % L1 data cache
 else
+    % Intel Mac
     maxFreq = [num2str(str2double(hw.cpufrequency_max)/1e6),' MHz'];
     cacheBytes = str2double(machdep.cache.size)*1024; % convert from kB
 end
@@ -136,16 +139,21 @@ for ii=1:numel( infostr )
     if isempty( colonIdx ) || colonIdx==1 || colonIdx==length(infostr{ii})
         continue
     end
-    prefix = infostr{ii}(1:colonIdx-1);
+    % Take care over nested structs
+    name = infostr{ii}(1:colonIdx-1);
     value = strtrim(infostr{ii}(colonIdx+1:end));
-    while ismember( '.', prefix )
-        dotIndex = find( prefix=='.', 1, 'last' );
-        suffix = prefix(dotIndex+1:end);
-        prefix = prefix(1:dotIndex-1);
-        value = struct( suffix, value );
+    if ismember( '.', name )
+        % Nested struct. Split the name.
+        dotIndex = find( name=='.', 1, 'first' );
+        name1 = name(1:dotIndex-1);
+        name2 = name(dotIndex+1:end);
+        % If we still have nested names, flatten using _.
+        name2 = strrep(name2, '.', '_');
+        info.(name1).(name2) = value;
+    else
+        % top-level property
+        info.(name) = value;
     end
-    info.(prefix) = value;
-    
 end
 
 %-------------------------------------------------------------------------%
@@ -218,7 +226,7 @@ for ii=1:numel( txt )
     if isempty( fieldName ) || isempty( fieldValue )
         continue;
     end
-    
+
     % Is it one of the fields we're interested in?
     idx = find( strcmpi( lookup(:,1), fieldName ) );
     if ~isempty( idx )
