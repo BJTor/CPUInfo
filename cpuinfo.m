@@ -24,76 +24,60 @@ if isunix
 else
     info = cpuInfoWindows();
 end
-
+end
 
 %-------------------------------------------------------------------------%
 function info = cpuInfoWindows()
-sysInfo = callWMIC( 'CPU', {'Name','MaxClockSpeed','L2CacheSize','NumberOfCores'} );
-osInfo = callWMIC( 'OS', {'Caption'} );
-computerInfo = callWMIC( 'ComputerSystem', {'Name','TotalPhysicalMemory'} );
+sysInfo = callWMI( 'Processor', {'Name','MaxClockSpeed','L2CacheSize','NumberOfCores'} );
+osInfo = callWMI( 'OperatingSystem', {'Caption'} );
+computerInfo = callWMI( 'ComputerSystem', {'Name','TotalPhysicalMemory'} );
 
 info = struct( ...
-    'CPUName', sysInfo.Name, ...
-    'Clock', [sysInfo.MaxClockSpeed,' MHz'], ...
-    'Cache', str2double(sysInfo.L2CacheSize) * 1024, ... % Convert from kB
-    'TotalMemory', str2double(computerInfo.TotalPhysicalMemory), ...
+    'CPUName', strtrim(string(sysInfo.Name)), ...
+    'Clock', [num2str(sysInfo.MaxClockSpeed),' MHz'], ...
+    'Cache', double(sysInfo.L2CacheSize) * 1024, ... % Convert from kB
+    'TotalMemory', double(computerInfo.TotalPhysicalMemory), ...
     'NumCPUs', sysInfo.NumCPUs, ...
-    'TotalCores', str2double( sysInfo.NumberOfCores ), ...
+    'TotalCores', double(sysInfo.NumberOfCores), ...
     'OSType', 'Windows', ...
-    'OSVersion', osInfo.Caption, ...
-    'Hostname', computerInfo.Name );
+    'OSVersion', char(osInfo.Caption), ...
+    'Hostname', char(computerInfo.Name) );
+end
 
 %-------------------------------------------------------------------------%
-function info = callWMIC( alias, field )
-% Call the MS-DOS WMIC (Windows Management) command
+function value = callWMI( alias, field )
+% Call the WMI (Windows Management Interface) using MATLAB's .Net
+% integration.
+narginchk(2,2);
 
-% We move to a temporary folder since WMIC needs write access to the local
-% folder
-olddir = pwd();
-cd( tempdir );
-if nargin<2
-    % Get all fields
-    [~, sysinfo] = system(sprintf( 'wmic %s get /value', alias ));
-else
-    if iscell(field)
-        field = strjoin(field, ',');
-    end
-    [~, sysinfo] = system(sprintf( 'wmic %s get %s  /value', alias, field ));
-end
-cd( olddir );
-fields = textscan( sysinfo, '%s', 'Delimiter', '\n' ); fields = fields{1};
-fields( cellfun( 'isempty', fields ) ) = [];
-% Each line has "field=value", so split them
-values = cell( size( fields ) );
-for ff=1:numel( fields )
-    idx = find( fields{ff}=='=', 1, 'first' );
-    if ~isempty( idx ) && idx>1
-        values{ff} = strtrim( fields{ff}(idx+1:end) );
-        fields{ff} = strtrim( fields{ff}(1:idx-1) );
+NET.addAssembly('System.Management');
+objects = System.Management.ManagementObjectSearcher("SELECT * FROM Win32_" + alias).Get;
+
+% Get the returned object and convert its contents into a struct.
+objEnum = objects.GetEnumerator;
+objEnum.MoveNext;
+numResultSets = objects.Count;
+object = objEnum.Current;
+props = object.Properties;
+
+value = cell2struct(cell(numel(field),1), field, 1);
+propEnum = props.GetEnumerator;
+while propEnum.MoveNext
+    tmp = propEnum.Current;
+    matches = strcmpi(string(tmp.Name), field);
+    if any(matches)
+        idx = find(matches,1);
+        value.(field{idx}) = tmp.Value;
     end
 end
 
-% Remove any duplicates (only occurs for dual-socket PC's and we will
-% assume that all sockets have the same processors in them).
-numResults = sum( strcmpi( fields, fields{1} ) );
-if numResults>1
-    % If we are counting cores, sum them.
-    numCoresEntries = find( strcmpi( fields, 'NumberOfCores' ) );
-    if ~isempty( numCoresEntries )
-        cores = cellfun( @str2double, values(numCoresEntries) );
-        values(numCoresEntries) = {num2str( sum( cores ) )};
-    end
-    % Now remove the duplicate results
-    [fields,idx] = unique(fields,'first');
-    values = values(idx);
+% If looking at processors, set the number of sockets too. Since we
+% Should get one result set per socket, this is just the object count.
+if strcmpi(alias, "Processor")
+    value.NumCPUs = double(numResultSets);
+    value.NumberOfCores = double(value.NumberOfCores) * value.NumCPUs;
 end
 
-% Convert to a structure
-info = cell2struct( values, fields );
-
-% If looking at CPUs, return the count too
-if strcmpi(alias, 'CPU')
-    info.NumCPUs = numResults;
 end
 
 %-------------------------------------------------------------------------%
@@ -124,6 +108,7 @@ info = struct( ...
     'OSType', getMacOSType(), ...
     'OSVersion', getMacOSVersion(), ...
     'Hostname', kern.kern.hostname );
+end
 
 %-------------------------------------------------------------------------%
 function info = callSysCtl( namespace )
@@ -155,18 +140,21 @@ for ii=1:numel( infostr )
         info.(name) = value;
     end
 end
+end
 
 %-------------------------------------------------------------------------%
 function vernum = getMacOSVersion()
 % Extract the OS version number from the system software version output.
 [~, vernum] = system('sw_vers -productVersion');
 vernum = strtrim(vernum);
+end
 
 %-------------------------------------------------------------------------%
 function type = getMacOSType()
 % Extract the OS type from the system software version output.
 [~, type] = system('sw_vers -productName');
 type = strtrim(type);
+end
 
 %-------------------------------------------------------------------------%
 function info = cpuInfoUnix()
@@ -194,6 +182,7 @@ info = cell2struct( [ ...
     fieldnames( osinfo )
     fieldnames( hostInfo )
     ] );
+end
 
 %-------------------------------------------------------------------------%
 function info = parseLinuxCPUInfoText( txt )
@@ -246,6 +235,7 @@ info.NumCPUs = str2double(info.NumCPUs) + 1;
 % Convert num cores
 info.TotalCores = info.NumCPUs * str2double(info.CoresPerCPU);
 info = rmfield(info, 'CoresPerCPU');
+end
 
 %-------------------------------------------------------------------------%
 function info = parseLinuxOSInfoText( txt )
@@ -256,14 +246,17 @@ info = struct( ...
 % bracket.
 b = extractBetween(txt{1}, 'Linux version ', ' (');
 info.OSVersion = b{1};
+end
 
 %-------------------------------------------------------------------------%
 function info = parseLinuxMemInfoText( txt )
 info = struct('TotalMemory', parseMemoryValue(txt, 'MemTotal'));
+end
 
 %-------------------------------------------------------------------------%
 function info = parseLinuxHostInfoText( txt )
 info = struct( 'Hostname', txt{1} );
+end
 
 %-------------------------------------------------------------------------%
 function bytes = parseMemoryValue(txt, fieldname)
@@ -284,6 +277,7 @@ else
     end
     bytes = str2double(txt(txt>='0' & txt<='9')) * bytesMultiplier;
 end
+end
 
 %-------------------------------------------------------------------------%
 function txt = readLinuxInfo(file)
@@ -296,3 +290,4 @@ cleanup = onCleanup( @() fclose( fid ) );
 
 txt = textscan( fid, '%s', 'Delimiter', '\n' );
 txt = txt{1};
+end
